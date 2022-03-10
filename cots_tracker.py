@@ -10,7 +10,6 @@ from collections import defaultdict
 from object_detection.utils import np_box_ops
 
 class Detection(abc.ABC):
-
   def __init__(self, bounding_box, file_name, is_detected=True):
     self.bounding_box = bounding_box
     self.is_detected = is_detected
@@ -35,7 +34,7 @@ class RecentFrames(abc.ABC):
 
 
 class CotsTracker(abc.ABC):
-  
+
   def __init__(self):
     # See get_tracked_persons() for the format of the contents of this
     # dictionary.
@@ -63,14 +62,22 @@ class CotsTracker(abc.ABC):
   def get_iou(self, ground_truth, prediction):
     return np_box_ops.iou(ground_truth, prediction)
 
-  def _track_object(self, bounding_box):
+  def _track_object(self, bounding_box, used_sequences):
     # Returns existing sequence id if object is tracked else returns -1
+    max_iou = 0
+    sequence_with_max_iou = None
     for sequence_id, sequence_list in self.sequence_id_to_bbox.items():
+      if (sequence_id in used_sequences):
+        continue;
       previous_bbox = sequence_list[-1].bounding_box
       left = np.reshape(previous_bbox, (1, 4))
       right = np.reshape(bounding_box, (1, 4))
-      if self.get_iou(left, right) > self.min_iou:
-        return sequence_id
+      iou = self.get_iou(left, right)
+      if (iou > max_iou):
+        max_iou = iou
+        sequence_with_max_iou = sequence_id
+    if max_iou > self.min_iou:
+      return sequence_with_max_iou
     return -1
 
   def remove_obsolete_sequences(self):
@@ -144,9 +151,9 @@ class CotsTracker(abc.ABC):
       self.flow = cv2.calcOpticalFlowFarneback(prev=self.reference_image,
                                                next=frame_gray, flow=self.flow,
                                                pyr_scale=0.4, levels=1,
-                                               winsize=5,
+                                               winsize=3,
                                                iterations=2, poly_n=5,
-                                               poly_sigma=1.2, flags=0)
+                                               poly_sigma=1.1, flags=0)
       self.propagate_previous_detections(filename)
     results = service_pb2.TrackerResults()
     results.file_path = filename
@@ -159,6 +166,7 @@ class CotsTracker(abc.ABC):
     new_sequence_id_to_bbox = {}
     existing_sequence_id_to_bbox = {}
 
+    used_sequences = set()
     for detection in detections:
       tracker_result = results.tracker_results.add()
       tracker_result.detection.CopyFrom(detection)
@@ -166,13 +174,14 @@ class CotsTracker(abc.ABC):
                                detection.top + detection.height,
                                detection.left + detection.width])
       current_detection = Detection(bounding_box, filename, True)
-      detection_sequence_id = self._track_object(bounding_box)
+      detection_sequence_id = self._track_object(bounding_box, used_sequences)
       if detection_sequence_id == -1:
         # Unable to link detection to existing sequence.
         # Generate new sequence id and append detection.
         detection_sequence_id = self._generate_next_sequence_id()
         new_sequence_id_to_bbox[detection_sequence_id] = current_detection
       else:
+        used_sequences.add(detection_sequence_id)
         existing_sequence_id_to_bbox[detection_sequence_id] = current_detection
       tracker_result.sequence_id = detection_sequence_id
       self.sequence_id_to_length[detection_sequence_id] += 1
