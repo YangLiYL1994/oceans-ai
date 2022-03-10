@@ -143,9 +143,9 @@ class CotsTracker(abc.ABC):
     if self.reference_image is not None:
       self.flow = cv2.calcOpticalFlowFarneback(prev=self.reference_image,
                                                next=frame_gray, flow=self.flow,
-                                               pyr_scale=0.8, levels=3,
-                                               winsize=15,
-                                               iterations=3, poly_n=5,
+                                               pyr_scale=0.4, levels=1,
+                                               winsize=5,
+                                               iterations=2, poly_n=5,
                                                poly_sigma=1.2, flags=0)
       self.propagate_previous_detections(filename)
     results = service_pb2.TrackerResults()
