@@ -19,7 +19,8 @@ from absl import app
 from absl import flags
 from absl import logging
 
-import cots_tracker
+import cots_tracker_v2
+from cots_tracker_v2_types import Detection
 import grpc
 import service_pb2
 import service_pb2_grpc
@@ -91,19 +92,19 @@ def get_ordered_filename_to_detections(inference_response, original_filenames):
   return collections.OrderedDict(sorted(result.items()))
 
 
-def format_tracker_response(tracker_results):
+def format_tracker_response(filename, tracks):
   """Formats tracker response in csv format."""
-  result = tracker_results.file_path
-  for entry in tracker_results.tracker_results:
+  result = filename
+  for track in tracks:
     detection_columns = [
-        _CLASS_ID_TO_LABEL[entry.detection.class_id],
-        str(entry.detection.score),
-        str(entry.sequence_id),
-        str(entry.sequence_length),
-        str(entry.detection.top),
-        str(entry.detection.left),
-        str(entry.detection.width),
-        str(entry.detection.height)
+        _CLASS_ID_TO_LABEL[track.det.class_id],
+        str(track.det.score),
+        str(track.id),
+        str(len(track.linked_dets)),
+        str(track.det.x0),
+        str(track.det.y0),
+        str(track.det.x1 - track.det.x0),
+        str(track.det.y1 - track.det.y0)
     ]
     result += ', { ' + ','.join(detection_columns) + '}'
   result += ','
@@ -183,20 +184,28 @@ def dispatch_inference_and_track(data, tracker, stub):
   output_lines = []
 
   for filename, detections in filename_to_detections.items():
-    if not detections:
-      output_lines.append(filename + ',')
-      # Call tracker to propagate previous detections.
-      unused_tracker_results = tracker.process_frame(
-          filename, detections, filename_to_image[filename],
-          image_shape[0], image_shape[1])
-    else:
-      tracker_results = tracker.process_frame(
-          filename, detections, filename_to_image[filename],
-          image_shape[0], image_shape[1])
-      output_lines.append(format_tracker_response(tracker_results))
-      logging.info('Tracking: %.2fms',
-                   (time.time() - postprocessing_start) * 1000)
+    print(detections)
+
+    current_timestamp = time.time()
+    detections_for_tracker = []
+    for detection in detections:
+      detections_for_tracker.append(Detection(class_id=0, score=detection.score, 
+        x0=detection.left, y0=detection.top, 
+        x1=detection.left + detection.width, 
+        y1=detection.top + detection.height))
+
+    # Always call tracker to propagate previous detections.
+    tracks = tracker.update(filename_to_image[filename], detections_for_tracker,
+                            current_timestamp)
     del filename_to_image[filename]
+
+    logging.info('Tracking: %.2fms',
+                 (time.time() - postprocessing_start) * 1000)
+
+    if not detections_for_tracker:
+      output_lines.append(filename + ',')
+    else:
+      output_lines.append(format_tracker_response(filename, tracks))
   output_lines.append('')
 
   try:
@@ -208,7 +217,7 @@ def dispatch_inference_and_track(data, tracker, stub):
 
 def create_filename_to_image_map():
   global filename_to_image
-  if 'filenme_to_image' not in globals():
+  if 'filename_to_image' not in globals():
     filename_to_image = {}
 
 def poller():
@@ -221,7 +230,7 @@ def poller():
   )
   image_ds = ds_counter.map(parse_image)
 
-  tracker = cots_tracker.CotsTracker()
+  tracker = cots_tracker_v2.OpticalFlowTracker(tid=1)
   image_count = 0
   elapsed_sec = 0
 
