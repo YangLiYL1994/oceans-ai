@@ -46,7 +46,7 @@ flags.mark_flags_as_required(['watch_path', 'output_file'])
 
 _MAX_MESSAGE_LENGTH = 100 * 1024 * 1024  # 100 MiB
 _IMAGE_TYPE = tf.uint8
-_POLLER_TIMEOUT_SEC = 3
+_POLLER_TIMEOUT_SEC = 0.5
 _CLASS_ID_TO_LABEL = ('COTS',)
 _MAX_DETECTION_FPS = 10
 
@@ -127,22 +127,22 @@ class Handler(events.FileSystemEventHandler):
       return
     try:
       if os.path.getsize(event_path) == 0:
-        print(f'Ignoring {event_path} - Empty file.')
+        logging.info(f'Ignoring {event_path} - Empty file.')
         return
     except OSError:
-      print(f'Ignoring {event_path} - File was deleted.')
+      logging.info(f'Ignoring {event_path} - File was deleted.')
       return
     if event_path[-4:] != '.jpg':
-      print(f'Ignoring {event_path} - Not a jpeg file.')
+      logging.info(f'Ignoring {event_path} - Not a jpeg file.')
       return
 
     current_timestamp = time.time()
     if len(self._frame_timestamps) == self._max_frame_timestamps:
       if current_timestamp - self._frame_timestamps[0] < self._min_timestamp_diff:
-        print(f'Ignoring {event_path} - Too many frames per second.')
+        logging.info(f'Ignoring {event_path} - Too many frames per second.')
         return
 
-    print(f'Reading {event_path}.')
+    logging.info(f'Reading {event_path}.')
 
     self._frame_timestamps.append(current_timestamp)
     while len(self._frame_timestamps) > self._max_frame_timestamps:
@@ -153,7 +153,7 @@ class Handler(events.FileSystemEventHandler):
       image = tf.io.read_file(event_path)
       image = tf.io.decode_jpeg(image)
       image_shape = image.numpy().shape
-      print(image_shape)
+      logging.info(f'Using image shape {image_shape}')
     file_queue.put(event_path)
 
 
@@ -171,21 +171,21 @@ def dispatch_inference_and_track(data, tracker, stub):
         original_image_height=image_shape[0],
         original_image_width=image_shape[1],
     )
+    logging.info(f'Sending inference request.')
     response = stub.Inference(request)
   except grpc.RpcError as e:
     logging.error('gRPC error: %s', str(e))
     return
   finally:
-    logging.info('Inference: %.2fms', (time.time() - inference_start) * 1000)
+    inference_ms = int((time.time() - inference_start) * 1000)
+    logging.info(f'Inference request took {inference_ms}ms')
 
-  postprocessing_start = time.time()
   filename_to_detections = get_ordered_filename_to_detections(
       response, request.file_paths)
   output_lines = []
 
   for filename, detections in filename_to_detections.items():
-    print(detections)
-
+    # TODO: Read this from the jpeg file.
     current_timestamp = time.time()
     detections_for_tracker = []
     for detection in detections:
@@ -200,7 +200,7 @@ def dispatch_inference_and_track(data, tracker, stub):
     del filename_to_image[filename]
 
     logging.info('Tracking: %.2fms',
-                 (time.time() - postprocessing_start) * 1000)
+                 (time.time() - current_timestamp) * 1000)
 
     if not detections_for_tracker:
       output_lines.append(filename + ',')

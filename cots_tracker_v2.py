@@ -63,6 +63,7 @@ class OpticalFlowTracker():
                 timestamp - self.prev_time > self.time_threshold):
             logging.warning(
                 'Too much time since last update, resetting tracker.')
+            self.tracks = []
 
         # Remove tracks which are:
         # - Touching the image edge.
@@ -72,12 +73,12 @@ class OpticalFlowTracker():
             if (track.det.x0 < self.border or track.det.y0 < self.border or
                     track.det.x1 >= (image_w - self.border) or 
                     track.det.y1 >= (image_h - self.border)):
-                print('Removing track because it\'s near the border')
+                logging.info('Removing track {track.id} because it\'s near the border')
                 continue
 
             if (timestamp - track.linked_dets[-1].timestamp > 
                     self.track_flow_time):
-                print('Removing track because it\'s too old')
+                logging.info('Removing track {track.id} because it\'s too old')
                 continue
 
             active_tracks.append(track)
@@ -86,7 +87,7 @@ class OpticalFlowTracker():
 
         # Run optical flow to update existing tracks.
         if self.prev_time > 0:
-            # print('Running optical flow propagataion.')
+            # print('Running optical flow propagation.')
             of_params = {
                 'winSize': self.of_size,
                 'maxLevel': self.of_levels,
@@ -95,7 +96,6 @@ class OpticalFlowTracker():
             for track in self.tracks:
                 input_points = np.float32([[[(track.det.x0 + track.det.x1) / 2, 
                                              (track.det.y0 + track.det.y1) / 2]]])
-                print(input_points.shape)
                 output_points, status, error = cv2.calcOpticalFlowPyrLK(
                     self.prev_image, image, input_points, None, **of_params)
                 w = track.det.x1 - track.det.x0
@@ -136,6 +136,7 @@ class OpticalFlowTracker():
                 linked = True
 
             if not linked:
+                logging.info(f'Creating new track with ID {self.track_id}')
                 new_track = Track(self.track_id, detection)
                 new_track.linked_dets.append(Tracklet(timestamp, detection))
                 self.tracks.append(new_track)

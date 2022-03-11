@@ -65,7 +65,8 @@ class Detector(service_pb2_grpc.Detector):
 
   def Inference(self, request, context):
     images = tf.io.parse_tensor(request.data, _IMAGE_TYPE)
-    print(f'Inference request with tensor shape: {images.shape}')
+    start = time.time()
+    logging.info(f'Inference request with tensor shape: {images.shape}')
 
     if images.shape[0] < FLAGS.batch_size:
       images = tf.pad(images, [[0, FLAGS.batch_size - images.shape[0]], [0, 0], [0, 0], [0, 0]])
@@ -88,7 +89,7 @@ class Detector(service_pb2_grpc.Detector):
     #     request.original_image_width)
     model_y_padding = 0
 
-    print('Detected:', num_detections)
+    # print('Detected:', num_detections)
     for file_idx, file_path in enumerate(request.file_paths):
       scores = detection_scores[file_idx]
       valid_indices = detection_scores[file_idx, :] >= FLAGS.detection_threshold
@@ -111,6 +112,9 @@ class Detector(service_pb2_grpc.Detector):
             height=(box_y2 - box_y1) * img_h,
         )
         result.detections.append(detection)
+
+    inference_ms = int(1000 * (time.time() - start))
+    logging.info(f'Inference request done in {inference_ms}ms')
     return result
 
 
