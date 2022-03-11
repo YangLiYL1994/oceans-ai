@@ -19,6 +19,8 @@ flags.DEFINE_string('model_signature', 'serving_default',
                     'Signature of the model to run.')
 flags.DEFINE_float('detection_threshold', 0.2,
                    'Detection confidence threshold to return.')
+flags.DEFINE_integer('batch_size', 4,
+                     'Batch size that the model expects.')
 
 _OUTPUT_NAMES = (
     'detection_anchor_indices',
@@ -64,6 +66,10 @@ class Detector(service_pb2_grpc.Detector):
   def Inference(self, request, context):
     images = tf.io.parse_tensor(request.data, _IMAGE_TYPE)
     print(f'Inference request with tensor shape: {images.shape}')
+
+    if images.shape[0] < FLAGS.batch_size:
+      images = tf.pad(images, [[0, FLAGS.batch_size - images.shape[0]], [0, 0], [0, 0], [0, 0]])
+
     detections = self._model_fn(images)
     result = service_pb2.InferenceReply()
     result.data = request.data
