@@ -126,7 +126,16 @@ class Handler(events.FileSystemEventHandler):
     if event.is_directory:
       return
     try:
-      if os.path.getsize(event_path) == 0:
+      # The on_created is often called when the file is opened, but not written
+      # to yet, so try to wait a short while to see if will be written to.
+      num_tries = 5
+      file_size = 0
+      while num_tries > 0 and file_size == 0:
+        file_size = os.path.getsize(event_path)
+        if file_size == 0:
+          num_tries -= 1
+          time.sleep(0.01)
+      if file_size == 0:
         logging.info(f'Ignoring {event_path} - Empty file.')
         return
     except OSError:
