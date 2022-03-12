@@ -73,12 +73,13 @@ class OpticalFlowTracker():
             if (track.det.x0 < self.border or track.det.y0 < self.border or
                     track.det.x1 >= (image_w - self.border) or 
                     track.det.y1 >= (image_h - self.border)):
-                logging.info('Removing track {track.id} because it\'s near the border')
+                logging.info(f'Removing track {track.id} because it\'s near the border')
                 continue
 
-            if (timestamp - track.linked_dets[-1].timestamp > 
-                    self.track_flow_time):
-                logging.info('Removing track {track.id} because it\'s too old')
+            time_since_last_detection = timestamp - track.linked_dets[-1].timestamp
+            if (time_since_last_detection > self.track_flow_time):
+                logging.info(f'Removing track {track.id} because it\'s too old '
+                             f'({time_since_last_detection:.02f}s)')
                 continue
 
             active_tracks.append(track)
@@ -136,7 +137,9 @@ class OpticalFlowTracker():
                 linked = True
 
             if not linked:
-                logging.info(f'Creating new track with ID {self.track_id}')
+                logging.info(f'Creating new track with ID {self.track_id}, '
+                             f'detection timestamp {timestamp}, '
+                             f'confidence {detection.score}')
                 new_track = Track(self.track_id, detection)
                 new_track.linked_dets.append(Tracklet(timestamp, detection))
                 self.tracks.append(new_track)
