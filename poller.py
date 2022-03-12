@@ -208,9 +208,6 @@ def dispatch_inference_and_track(data, tracker, stub):
                             current_timestamp)
     del filename_to_image[filename]
 
-    logging.info('Tracking: %.2fms',
-                 (time.time() - current_timestamp) * 1000)
-
     if not detections_for_tracker:
       output_lines.append(filename + ',')
     else:

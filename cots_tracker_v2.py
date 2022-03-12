@@ -1,4 +1,5 @@
 import copy
+import time
 
 from absl import logging
 import cv2
@@ -53,6 +54,9 @@ class OpticalFlowTracker():
         self.prev_time = -1
 
     def update(self, image_bgr, detections, timestamp):
+        start = time.time()
+        num_optical_flow_calls = 0
+
         image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
 
         image_w = image.shape[1]
@@ -99,6 +103,7 @@ class OpticalFlowTracker():
                                              (track.det.y0 + track.det.y1) / 2]]])
                 output_points, status, error = cv2.calcOpticalFlowPyrLK(
                     self.prev_image, image, input_points, None, **of_params)
+                num_optical_flow_calls += 1
                 w = track.det.x1 - track.det.x0
                 h = track.det.y1 - track.det.y0
                 # print(f'Detection before flow update: {track.det}')
@@ -137,9 +142,7 @@ class OpticalFlowTracker():
                 linked = True
 
             if not linked:
-                logging.info(f'Creating new track with ID {self.track_id}, '
-                             f'detection timestamp {timestamp}, '
-                             f'confidence {detection.score}')
+                logging.info(f'Creating new track with ID {self.track_id}')
                 new_track = Track(self.track_id, detection)
                 new_track.linked_dets.append(Tracklet(timestamp, detection))
                 self.tracks.append(new_track)
@@ -147,5 +150,10 @@ class OpticalFlowTracker():
         
         self.prev_image = image
         self.prev_time = timestamp
+
+        if num_optical_flow_calls > 0:
+            tracking_ms = int(1000 * (time.time() - start))
+            logging.info(f'Tracking took {tracking_ms}ms, '
+                         f'{num_optical_flow_calls} optical flow calls')
 
         return self.tracks
