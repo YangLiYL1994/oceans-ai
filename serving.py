@@ -17,7 +17,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('model_path', None, 'Path to inference SavedModel.')
 flags.DEFINE_string('model_signature', 'serving_default',
                     'Signature of the model to run.')
-flags.DEFINE_float('detection_threshold', 0.2,
+flags.DEFINE_float('detection_threshold', 0.4,
                    'Detection confidence threshold to return.')
 flags.DEFINE_integer('batch_size', 4,
                      'Batch size that the model expects.')
@@ -59,9 +59,10 @@ class Detector(service_pb2_grpc.Detector):
 
     logging.info('Warming up..')
 
-    # Warm-up. Model will reduce to actual batch size and resize to required input size.
+    # Warm-up.
+    # TODO: Read the input size from the model.
     for i in range(10):
-      self._model_fn(tf.zeros((16, 16, 16, 3), dtype=tf.uint8))
+      self._model_fn(tf.zeros((4, 736, 1280, 3), dtype=tf.uint8))
 
   def Inference(self, request, context):
     images = tf.io.parse_tensor(request.data, _IMAGE_TYPE)
@@ -73,7 +74,6 @@ class Detector(service_pb2_grpc.Detector):
 
     detections = self._model_fn(images)
     result = service_pb2.InferenceReply()
-    result.data = request.data
     img_h, img_w = images.shape[1:3]
 
     num_detections = detections['num_detections'].numpy().astype(np.int32)
