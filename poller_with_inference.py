@@ -10,6 +10,7 @@ import multiprocessing
 import os
 import queue
 import time
+import threading
 
 from absl import app
 from absl import flags
@@ -43,6 +44,8 @@ _CLASS_ID_TO_LABEL = ('COTS',)
 _MAX_DETECTION_FPS = 10
 
 file_queue = multiprocessing.Queue()
+tracking_queue = multiprocessing.Queue()
+terminate_tracking_thread = False
 
 image_shape = None
 
@@ -193,54 +196,64 @@ class Handler(events.FileSystemEventHandler):
       logging.info(f'Using image shape {image_shape}')
 
     image_bgr = cv2.imread(event_path, cv2.IMREAD_COLOR)
+    if image_bgr.size == 0:
+      return
+
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 
-    file_queue.put((event_path, image_rgb))
+    file_queue.put((time.time(), event_path, image_rgb))
 
 
-def dispatch_inference_and_track(data, detector, tracker):
-  """Dispatches a single inference request and runs tracker."""
+def run_inference(data, detector):
+  """Runs inference on a batch of images."""
   inference_start = time.time()
-  detector_output = detector.process_images(data[1])
+  detector_output = detector.process_images(data[2])
   logging.info('Inference: %.2fms', (time.time() - inference_start) * 1000)
 
-  output_lines = []
+  for timestamp, file_path, image, detections in zip(data[0], data[1], data[2], detector_output):
+    tracking_queue.put((timestamp, file_path, image, detections))
 
-  for file_path, image, detections in zip(data[0], data[1], detector_output):
-    # TODO: Read this from the jpeg file or return from file system event
-    # handler.
-    current_timestamp = time.time()
 
-    # Always call tracker to propagate previous detections.
-    tracks = tracker.update(image.numpy(), detections, current_timestamp)
-      
-    file_path = file_path.numpy().decode('utf-8')
-    output_lines.append(format_tracker_response(file_path, tracks))
-  output_lines.append('')
+def tracking_thread_fn():
+  tracker = OpticalFlowTracker(tid=1)
 
-  try:
-    with open(FLAGS.output_file, 'a') as output_file:
-      output_file.write('\n'.join(output_lines))
-  except (OSError, IOError) as e:
-    logging.error('Error writing to file %s', e.strerror)
+  while not terminate_tracking_thread:
+    output_lines = []
+
+    try:
+      (timestamp, file_path, image, detections) = tracking_queue.get(timeout=1.0)
+
+      # Always call tracker to propagate previous detections.
+      tracks = tracker.update(image.numpy(), detections, timestamp)
+        
+      file_path = file_path.numpy().decode('utf-8')
+      output_lines.append(format_tracker_response(file_path, tracks))
+      output_lines.append('')
+
+      try:
+        with open(FLAGS.output_file, 'a') as output_file:
+          output_file.write('\n'.join(output_lines))
+      except (OSError, IOError) as e:
+        logging.error('Error writing to file %s', e.strerror)
+    except queue.Empty:
+      pass
 
 
 def poller(detector):
-  """Runs main poller loop that fetches files and run inference."""
+  """Runs main poller loop that fetches files and runs inference."""
   image_ds = tf.data.Dataset.from_generator(
       data_gen,
-      output_types=(tf.string, tf.uint8),
-      output_shapes=(tf.TensorShape([]), tf.TensorShape([1080, 1920, 3])),
+      output_types=(tf.float32, tf.string, tf.uint8),
+      output_shapes=(tf.TensorShape([]), tf.TensorShape([]),
+                     tf.TensorShape([1080, 1920, 3])),
   )
 
-  tracker = OpticalFlowTracker(tid=1)
   image_count = 0
   elapsed_sec = 0
-
   while True:
     start = time.time()
     for data in image_ds.repeat().batch(FLAGS.batch_size):
-      dispatch_inference_and_track(data, detector, tracker)
+      run_inference(data, detector)
       elapsed_sec += time.time() - start
       image_count += data[0].numpy().size
       logging.info('Total inference: %d, FPS: %.2f', image_count,
@@ -258,11 +271,16 @@ def main(unused_argv):
   observer.schedule(event_handler, FLAGS.watch_path, recursive=True)
   observer.start()
 
+  tracking_thread = threading.Thread(target=tracking_thread_fn)
+  tracking_thread.start()
+
   try:
     poller(detector)
   except KeyboardInterrupt:
     observer.stop()
+    terminate_tracking_thread = True
   observer.join()
+  tracking_thread.join()
 
 
 if __name__ == '__main__':
