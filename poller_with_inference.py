@@ -3,9 +3,15 @@ r"""Watches specific directory and runs inference on the images.
 Usage:
   python poller_with_inference.py --watch_path=path/to/watch \
     --output_file=path/to/output.csv --model_path=path/to/model --batch_size=4
+
+  # For batched inference (non-realtime):
+  python poller_with_inference.py --watch_path=path/to/watch \
+    --output_file=path/to/output.csv --model_path=path/to/model --batch_size=4 \
+    --watch_mode=static
 """
 
 import collections
+import glob
 import multiprocessing
 import os
 import queue
@@ -35,6 +41,11 @@ flags.DEFINE_string('model_signature', 'serving_default',
                     'Signature of the model to run.')
 flags.DEFINE_float('detection_threshold', 0.4,
                    'Detection confidence threshold to return.')
+flags.DEFINE_enum(
+    'watch_mode', 'stream', ['stream', 'static'],
+    'Whether to watch the directory continuously, or just read the list of file'
+    ' once and perform a batched inference.'
+)
 
 flags.mark_flags_as_required(['watch_path', 'output_file', 'model_path'])
 
@@ -269,27 +280,59 @@ def poller(detector):
                    image_count / elapsed_sec)
       start = time.time()
 
+def static_poller(detector):
+  file_list = sorted(glob.glob(os.path.join(FLAGS.watch_path, '*.jpg')))
+  print(file_list[:3])
+  list_ds = tf.data.Dataset.from_tensor_slices(file_list)
+
+  def _parse_image(filename):
+    print(filename)
+    tf.print(filename)
+    image = tf.io.read_file(filename)
+    image = tf.io.decode_jpeg(image)
+    if _IMAGE_TYPE == tf.float32:
+      image = tf.image.convert_image_dtype(image, tf.float32)
+    return (time.time(), filename, image)
+
+  images_ds = list_ds.map(_parse_image)
+  start = time.time()
+  elapsed_sec = 0
+  image_count = 0
+  for data in images_ds.batch(FLAGS.batch_size):
+    run_inference(data, detector)
+    elapsed_sec += time.time() - start
+    image_count += data[0].numpy().size
+    logging.info('Total inference: %d, FPS: %.2f', image_count,
+                 image_count / elapsed_sec)
+    start = time.time()
+
 
 def main(unused_argv):
   tf.config.optimizer.set_experimental_options({'auto_mixed_precision': True})
   tf.config.optimizer.set_jit(True)
 
   detector = Detector(FLAGS.model_path)
-  event_handler = Handler()
-  observer = observers.Observer()
-  observer.schedule(event_handler, FLAGS.watch_path, recursive=True)
-  observer.start()
 
+
+  
   tracking_thread = threading.Thread(target=tracking_thread_fn)
   tracking_thread.start()
 
-  try:
-    poller(detector)
-  except KeyboardInterrupt:
-    observer.stop()
-    global terminate_tracking_thread
-    terminate_tracking_thread = True
-  observer.join()
+  if FLAGS.watch_mode == 'stream':
+    event_handler = Handler()
+    observer = observers.Observer()
+    observer.schedule(event_handler, FLAGS.watch_path, recursive=True)
+    observer.start()
+
+    try:
+      poller(detector)
+    except KeyboardInterrupt:
+      observer.stop()
+      global terminate_tracking_thread
+      terminate_tracking_thread = True
+    observer.join()
+  elif FLAGS.watch_mode == 'static':
+    static_poller(detector)
   tracking_thread.join()
 
 
