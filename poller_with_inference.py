@@ -9,15 +9,15 @@ import collections
 import multiprocessing
 import os
 import queue
-import time
 import threading
+import time
 
 from absl import app
 from absl import flags
 from absl import logging
-import cv2
 from cots_tracker_v2 import OpticalFlowTracker
 from cots_tracker_v2_types import Detection
+import cv2
 import numpy as np
 import tensorflow as tf
 from watchdog import events
@@ -49,6 +49,7 @@ terminate_tracking_thread = False
 
 image_shape = None
 
+
 class Detector():
   """Loads a COTS detection model and runs inference."""
 
@@ -73,16 +74,19 @@ class Detector():
 
     # Warm up.
     # TODO: Read model input size from model.
-    for i in range(10):
-      self._model_fn(tf.zeros((FLAGS.batch_size, 1080, 1920, 3), dtype=tf.uint8))
+    for _ in range(10):
+      self._model_fn(
+          tf.zeros((FLAGS.batch_size, 1080, 1920, 3), dtype=tf.uint8))
 
-    logging.info(f'Model loading done in {time.time() - start:.02f}s.')
+    logging.info('Model loading done in %.02fs', time.time() - start)
 
   def process_images(self, images):
-    logging.info(f'Inference request with tensor shape: {images.shape}')
+    logging.info('Inference request with tensor shape: %s', images.shape)
 
     if images.shape[0] < FLAGS.batch_size:
-      images = tf.pad(images, [[0, FLAGS.batch_size - images.shape[0]], [0, 0], [0, 0], [0, 0]])
+      images = tf.pad(
+          images,
+          [[0, FLAGS.batch_size - images.shape[0]], [0, 0], [0, 0], [0, 0]])
 
     detections = self._model_fn(images)
 
@@ -98,20 +102,22 @@ class Detector():
     detections = [[] for _ in range(batch_size)]
 
     for batch_index in range(batch_size):
-      valid_indices = detection_scores[batch_index, :] >= FLAGS.detection_threshold
+      valid_indices = detection_scores[
+          batch_index, :] >= FLAGS.detection_threshold
       classes = detection_classes[batch_index, valid_indices]
       scores = detection_scores[batch_index, valid_indices]
       boxes = detection_boxes[batch_index, valid_indices, :]
 
       for class_id, score, box in zip(classes, scores, boxes):
-        detections[batch_index].append(Detection(
-            class_id=class_id,
-            score=score,
-            x0=box[1] * img_w,
-            y0=box[0] * img_h,
-            x1=box[3] * img_w,
-            y1=box[2] * img_h,
-        ))
+        detections[batch_index].append(
+            Detection(
+                class_id=class_id,
+                score=score,
+                x0=box[1] * img_w,
+                y0=box[0] * img_h,
+                x1=box[3] * img_w,
+                y1=box[2] * img_h,
+            ))
 
     return detections
 
@@ -132,10 +138,10 @@ def format_tracker_response(file_path, tracks):
         str(track.det.score),
         str(track.id),
         str(len(track.linked_dets)),
-        str(track.det.x0),
-        str(track.det.y0),
-        str(track.det.x1 - track.det.x0),
-        str(track.det.y1 - track.det.y0)
+        str(round(track.det.x0)),
+        str(round(track.det.y0)),
+        str(round(track.det.x1 - track.det.x0)),
+        str(round(track.det.y1 - track.det.y0))
     ]
     result += ', { ' + ','.join(detection_columns) + '}'
   result += ','
@@ -167,22 +173,23 @@ class Handler(events.FileSystemEventHandler):
           num_tries -= 1
           time.sleep(0.01)
       if file_size == 0:
-        logging.info(f'Ignoring {event_path} - Empty file.')
+        logging.info('Ignoring %s - Empty file.', event_path)
         return
     except OSError:
-      logging.info(f'Ignoring {event_path} - File was deleted.')
+      logging.info('Ignoring %s - File was deleted.', event_path)
       return
     if event_path[-4:] != '.jpg':
-      logging.info(f'Ignoring {event_path} - Not a jpeg file.')
+      logging.info('Ignoring %s - Not a jpeg file.', event_path)
       return
 
     current_timestamp = time.time()
     if len(self._frame_timestamps) == self._max_frame_timestamps:
-      if current_timestamp - self._frame_timestamps[0] < self._min_timestamp_diff:
-        logging.info(f'Ignoring {event_path} - Too many frames per second.')
+      if current_timestamp - self._frame_timestamps[
+          0] < self._min_timestamp_diff:
+        logging.info('Ignoring %s - Too many frames per second.', event_path)
         return
 
-    logging.info(f'Reading {event_path}.')
+    logging.info('Reading %s.', event_path)
 
     self._frame_timestamps.append(current_timestamp)
     while len(self._frame_timestamps) > self._max_frame_timestamps:
@@ -193,7 +200,7 @@ class Handler(events.FileSystemEventHandler):
       image = tf.io.read_file(event_path)
       image = tf.io.decode_jpeg(image, try_recover_truncated=True)
       image_shape = image.numpy().shape
-      logging.info(f'Using image shape {image_shape}')
+      logging.info('Using image shape %s', image_shape)
 
     image_bgr = cv2.imread(event_path, cv2.IMREAD_COLOR)
     if image_bgr.size == 0:
@@ -210,7 +217,8 @@ def run_inference(data, detector):
   detector_output = detector.process_images(data[2])
   logging.info('Inference: %.2fms', (time.time() - inference_start) * 1000)
 
-  for timestamp, file_path, image, detections in zip(data[0], data[1], data[2], detector_output):
+  for timestamp, file_path, image, detections in zip(data[0], data[1], data[2],
+                                                     detector_output):
     tracking_queue.put((timestamp, file_path, image, detections))
 
 
@@ -221,11 +229,12 @@ def tracking_thread_fn():
     output_lines = []
 
     try:
-      (timestamp, file_path, image, detections) = tracking_queue.get(timeout=1.0)
+      (timestamp, file_path, image,
+       detections) = tracking_queue.get(timeout=1.0)
 
       # Always call tracker to propagate previous detections.
       tracks = tracker.update(image.numpy(), detections, timestamp)
-        
+
       file_path = file_path.numpy().decode('utf-8')
       output_lines.append(format_tracker_response(file_path, tracks))
       output_lines.append('')
@@ -257,7 +266,7 @@ def poller(detector):
       elapsed_sec += time.time() - start
       image_count += data[0].numpy().size
       logging.info('Total inference: %d, FPS: %.2f', image_count,
-                    image_count / elapsed_sec)
+                   image_count / elapsed_sec)
       start = time.time()
 
 
@@ -278,6 +287,7 @@ def main(unused_argv):
     poller(detector)
   except KeyboardInterrupt:
     observer.stop()
+    global terminate_tracking_thread
     terminate_tracking_thread = True
   observer.join()
   tracking_thread.join()
