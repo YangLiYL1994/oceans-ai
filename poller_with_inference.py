@@ -238,8 +238,14 @@ class Handler(events.FileSystemEventHandler):
 
     logging.info('Found %s.', event_path)
 
-    # TODO: Extract timestamp from filename or EXIF data.
-    frame_timestamp = current_timestamp
+    # Attempt to extract timestamp from filename, assumed to be formatted like:
+    # image_20220318033024_000001066_0000026.jpg
+    filename = os.path.splitext(os.path.basename(event_path))[0]
+    filename_parts = filename.split('_')
+    if len(filename_parts) == 4:
+      frame_timestamp = int(filename_parts[2]) / 1000
+    else:
+      frame_timestamp = current_timestamp
 
     file_queue.put((frame_timestamp, event_path))
 
