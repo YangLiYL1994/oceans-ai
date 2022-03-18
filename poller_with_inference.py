@@ -46,16 +46,25 @@ flags.DEFINE_enum(
     'Whether to watch the directory continuously, or just read the list of file'
     ' once and perform a batched inference.'
 )
+flags.DEFINE_bool('enable_max_detection_fps', True,
+                  'Whether to limit the number of images that are read from disk '
+                  'to max_detection_fps frames per second.')
+flags.DEFINE_integer('max_detection_fps', 10,
+                     'If enable_max_detection_fps is true, this sets the maximum '
+                     'number of frames that are read from disk per second')
 
 flags.mark_flags_as_required(['watch_path', 'output_file', 'model_path'])
 
 _IMAGE_TYPE = tf.uint8
 _POLLER_TIMEOUT_SEC = 0.4
 _CLASS_ID_TO_LABEL = ('COTS',)
-_MAX_DETECTION_FPS = 10
+
 
 file_queue = multiprocessing.Queue()
-tracking_queue = multiprocessing.Queue()
+# Set a maxsize here to make sure tracking can keep up with inference.
+# Items in the tracking queue contain batches of images and detection
+# results, so don't set this value too high.
+tracking_queue = multiprocessing.Queue(maxsize=10)
 terminate_tracking_thread = False
 
 image_shape = None
@@ -135,7 +144,40 @@ class Detector():
 
 def data_gen():
   try:
-    yield file_queue.get(timeout=_POLLER_TIMEOUT_SEC)
+    (timestamp, event_path) = file_queue.get(timeout=_POLLER_TIMEOUT_SEC)
+
+    try:
+      # The on_created() method in the file system event handler is often
+      # called when the file is opened, but not written to yet, so try to
+      # wait a short while to see if will be written to.
+      num_tries = 5
+      file_size = 0
+      while num_tries > 0 and file_size == 0:
+        file_size = os.path.getsize(event_path)
+        if file_size == 0:
+          num_tries -= 1
+          time.sleep(0.01)
+      if file_size == 0:
+        logging.info('Ignoring %s - Empty file.', event_path)
+        return
+    except OSError:
+      logging.info('Ignoring %s - File was deleted.', event_path)
+      return
+
+    global image_shape
+    if image_shape is None:
+      image = tf.io.read_file(event_path)
+      image = tf.io.decode_jpeg(image, try_recover_truncated=True)
+      image_shape = image.numpy().shape
+      logging.info('Using image shape %s', image_shape)
+
+    image_bgr = cv2.imread(event_path, cv2.IMREAD_COLOR)
+    if image_bgr.size == 0:
+      return
+
+    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    
+    yield (timestamp, event_path, image_rgb)
   except queue.Empty:
     pass  # Allow empty dataset to be passed to prevent process from blocking
 
@@ -162,64 +204,44 @@ def format_tracker_response(file_path, tracks):
 class Handler(events.FileSystemEventHandler):
   """Event handler for newly created images."""
 
-  def __init__(self):
+  def __init__(self, enable_max_detection_fps, max_detection_fps):
     # Keep track of the last N timestamps of frames that were forwarded to
     # the detector, so we can try to reach a target FPS by dropping frames.
-    self._frame_timestamps = collections.deque()
-    self._max_frame_timestamps = 20
-    self._min_timestamp_diff = self._max_frame_timestamps / _MAX_DETECTION_FPS
+    self._enable_max_detection_fps = enable_max_detection_fps
+    if self._enable_max_detection_fps:
+      self._max_detection_fps = max_detection_fps
+      self._frame_timestamps = collections.deque()
+      self._max_frame_timestamps = 20
 
   def on_created(self, event):
     event_path = event.src_path
+
     if event.is_directory:
-      return
-    try:
-      # The on_created is often called when the file is opened, but not written
-      # to yet, so try to wait a short while to see if will be written to.
-      num_tries = 5
-      file_size = 0
-      while num_tries > 0 and file_size == 0:
-        file_size = os.path.getsize(event_path)
-        if file_size == 0:
-          num_tries -= 1
-          time.sleep(0.01)
-      if file_size == 0:
-        logging.info('Ignoring %s - Empty file.', event_path)
-        return
-    except OSError:
-      logging.info('Ignoring %s - File was deleted.', event_path)
       return
     if event_path[-4:] != '.jpg':
       logging.info('Ignoring %s - Not a jpeg file.', event_path)
       return
 
     current_timestamp = time.time()
-    if len(self._frame_timestamps) == self._max_frame_timestamps:
-      if current_timestamp - self._frame_timestamps[
-          0] < self._min_timestamp_diff:
-        logging.info('Ignoring %s - Too many frames per second.', event_path)
-        return
 
-    logging.info('Reading %s.', event_path)
+    if self._enable_max_detection_fps:
+      num_frame_timestamps = len(self._frame_timestamps)
+      if num_frame_timestamps > 1:
+        min_timestamp_diff = num_frame_timestamps / self._max_detection_fps
+        if current_timestamp - self._frame_timestamps[0] < min_timestamp_diff:
+          logging.info('Ignoring %s - Too many frames per second.', event_path)
+          return
 
-    self._frame_timestamps.append(current_timestamp)
-    while len(self._frame_timestamps) > self._max_frame_timestamps:
-      self._frame_timestamps.popleft()
+      self._frame_timestamps.append(current_timestamp)
+      while len(self._frame_timestamps) > self._max_frame_timestamps:
+        self._frame_timestamps.popleft()
 
-    global image_shape
-    if image_shape is None:
-      image = tf.io.read_file(event_path)
-      image = tf.io.decode_jpeg(image, try_recover_truncated=True)
-      image_shape = image.numpy().shape
-      logging.info('Using image shape %s', image_shape)
+    logging.info('Found %s.', event_path)
 
-    image_bgr = cv2.imread(event_path, cv2.IMREAD_COLOR)
-    if image_bgr.size == 0:
-      return
+    # TODO: Extract timestamp from filename or EXIF data.
+    frame_timestamp = current_timestamp
 
-    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-
-    file_queue.put((time.time(), event_path, image_rgb))
+    file_queue.put((frame_timestamp, event_path))
 
 
 def run_inference(data, detector):
@@ -312,14 +334,12 @@ def main(unused_argv):
   tf.config.optimizer.set_jit(True)
 
   detector = Detector(FLAGS.model_path)
-
-
   
   tracking_thread = threading.Thread(target=tracking_thread_fn)
   tracking_thread.start()
 
   if FLAGS.watch_mode == 'stream':
-    event_handler = Handler()
+    event_handler = Handler(FLAGS.enable_max_detection_fps, FLAGS.max_detection_fps)
     observer = observers.Observer()
     observer.schedule(event_handler, FLAGS.watch_path, recursive=True)
     observer.start()
