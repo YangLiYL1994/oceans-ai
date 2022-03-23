@@ -33,7 +33,7 @@ FLAGS = flags.FLAGS
 
 flags.DEFINE_string('watch_path', None, 'Path to watch for new images.')
 flags.DEFINE_string('output_file', None, 'A csv file to append new detections.')
-flags.DEFINE_integer('batch_size', 4,
+flags.DEFINE_integer('batch_size', 8,
                      'number of images to send for inference at once.')
 
 flags.DEFINE_string('model_path', None, 'Path to inference SavedModel.')
@@ -172,8 +172,14 @@ def data_gen():
       logging.info('Using image shape %s', image_shape)
 
     image_bgr = cv2.imread(event_path, cv2.IMREAD_COLOR)
+    
     if image_bgr.size == 0:
       return
+      
+    w, h, c = image_bgr.shape
+    
+    if w != 1920 or h != 1080:
+    	image_bgr = cv2.resize(image_bgr, (1920, 1080))
 
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     
@@ -264,6 +270,7 @@ def run_inference(data, detector):
 def tracking_thread_fn():
   tracker = OpticalFlowTracker(tid=1)
 
+  timeout_cnt = 0
   while not terminate_tracking_thread:
     output_lines = []
 
@@ -284,7 +291,11 @@ def tracking_thread_fn():
       except (OSError, IOError) as e:
         logging.error('Error writing to file %s', e.strerror)
     except queue.Empty:
-      pass
+      if timeout_cnt < 10:
+        timeout_cnt += 1
+        pass
+      else:
+        return
 
 
 def poller(detector):
@@ -302,7 +313,7 @@ def poller(detector):
     start = time.time()
     for data in image_ds.repeat().batch(FLAGS.batch_size):
       run_inference(data, detector)
-      elapsed_sec += time.time() - start
+      elapsed_sec = time.time() - start
       image_count += data[0].numpy().size
       logging.info('Total inference: %d, FPS: %.2f', image_count,
                    image_count / elapsed_sec)
@@ -328,7 +339,7 @@ def static_poller(detector):
   image_count = 0
   for data in images_ds.batch(FLAGS.batch_size):
     run_inference(data, detector)
-    elapsed_sec += time.time() - start
+    elapsed_sec = time.time() - start
     image_count += data[0].numpy().size
     logging.info('Total inference: %d, FPS: %.2f', image_count,
                  image_count / elapsed_sec)
