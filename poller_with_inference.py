@@ -291,11 +291,9 @@ def tracking_thread_fn():
       except (OSError, IOError) as e:
         logging.error('Error writing to file %s', e.strerror)
     except queue.Empty:
-      if timeout_cnt < 10:
         timeout_cnt += 1
-        pass
-      else:
-        return
+        if FLAGS.watch_mode == 'static' and timeout_cnt >= 10:
+          return
 
 
 def poller(detector):
