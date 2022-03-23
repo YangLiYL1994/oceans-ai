@@ -176,10 +176,10 @@ def data_gen():
     if image_bgr.size == 0:
       return
       
-    w,h,c = image_bgr.shape
+    w, h, c = image_bgr.shape
     
-    if w!=1920 or h!=1080:
-    	image_bgr = cv2.resize(image_bgr, (1920,1080))
+    if w != 1920 or h != 1080:
+    	image_bgr = cv2.resize(image_bgr, (1920, 1080))
 
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     
