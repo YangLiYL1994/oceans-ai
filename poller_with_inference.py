@@ -313,7 +313,7 @@ def poller(detector):
     start = time.time()
     for data in image_ds.repeat().batch(FLAGS.batch_size):
       run_inference(data, detector)
-      elapsed_sec = time.time() - start
+      elapsed_sec += time.time() - start
       image_count += data[0].numpy().size
       logging.info('Total inference: %d, FPS: %.2f', image_count,
                    image_count / elapsed_sec)
@@ -339,7 +339,7 @@ def static_poller(detector):
   image_count = 0
   for data in images_ds.batch(FLAGS.batch_size):
     run_inference(data, detector)
-    elapsed_sec = time.time() - start
+    elapsed_sec += time.time() - start
     image_count += data[0].numpy().size
     logging.info('Total inference: %d, FPS: %.2f', image_count,
                  image_count / elapsed_sec)
