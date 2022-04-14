@@ -6,3 +6,4 @@ tensorflow==2.8.0
 watchdog==0.10.3
 tensorflow-object-detection-api
 opencv-python
+albumentations
