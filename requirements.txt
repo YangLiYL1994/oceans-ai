@@ -7,3 +7,4 @@ watchdog==0.10.3
 tensorflow-object-detection-api
 opencv-python
 albumentations
+kora
