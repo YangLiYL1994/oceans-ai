@@ -8,3 +8,4 @@ tensorflow-object-detection-api
 opencv-python
 albumentations
 kora
+google-colab
