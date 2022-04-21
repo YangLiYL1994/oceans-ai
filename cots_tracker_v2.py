@@ -37,11 +37,11 @@ class OpticalFlowTracker():
         self.track_id = tid
         # How long to apply optical flow tracking without getting positive 
         # detections (sec).
-        self.track_flow_time = ft
+        self.track_flow_time = ft * 1000
         # Required IoU overlap to link a detection to a track.
         self.overlap_threshold = iou
         # Used to detect if detector needs to be reset.
-        self.time_threshold = tt
+        self.time_threshold = tt * 1000
         self.border = bb
         # Size of optical flow region.
         self.of_size = (size, size)
